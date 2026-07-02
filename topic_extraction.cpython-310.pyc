@@ -1,0 +1,81 @@
+"""
+Real-time microphone audio capture for the meeting assistant.
+Records audio in configurable chunks and supports streaming callback mode.
+"""
+import pyaudio
+import numpy as np
+from typing import Callable, Optional
+
+
+class AudioRecorder:
+    """Captures live microphone audio in configurable chunks."""
+
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        chunk_size: int = 1024,
+        channels: int = 1,
+        format: int = pyaudio.paInt16,
+    ):
+        self.sample_rate = sample_rate
+        self.chunk_size = chunk_size
+        self.channels = channels
+        self.format = format
+        self._pyaudio = pyaudio.PyAudio()
+        self._stream: Optional[pyaudio.Stream] = None
+        self._recording = False
+
+    def start(self, callback: Callable[[np.ndarray], None]) -> None:
+        """Start recording and invoke callback with each chunk (float32, [-1, 1])."""
+        if self._recording:
+            return
+        self._recording = True
+
+        def _stream_callback(in_data, frame_count, time_info, status):
+            if status:
+                print(f"PyAudio status: {status}")
+            audio = np.frombuffer(in_data, dtype=np.int16)
+            audio_float = audio.astype(np.float32) / 32768.0
+            callback(audio_float)
+            return (None, pyaudio.paContinue)
+
+        self._stream = self._pyaudio.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.sample_rate,
+            input=True,
+            frames_per_buffer=self.chunk_size,
+            stream_callback=_stream_callback,
+        )
+        self._stream.start_stream()
+
+    def stop(self) -> None:
+        """Stop recording and release resources."""
+        self._recording = False
+        if self._stream:
+            self._stream.stop_stream()
+            self._stream.close()
+            self._stream = None
+
+    def close(self) -> None:
+        """Release PyAudio resources."""
+        self.stop()
+        self._pyaudio.terminate()
+
+    def record_chunk(self, duration_sec: float) -> np.ndarray:
+        """Record a single chunk for a given duration (blocking). Returns float32 array."""
+        frames = []
+        num_frames = int(self.sample_rate * duration_sec / self.chunk_size)
+        stream = self._pyaudio.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.sample_rate,
+            input=True,
+            frames_per_buffer=self.chunk_size,
+        )
+        for _ in range(num_frames):
+            data = stream.read(self.chunk_size, exception_on_overflow=False)
+            audio = np.frombuffer(data, dtype=np.int16)
+            frames.append(audio.astype(np.float32) / 32768.0)
+        stream.close()
+        return np.concatenate(frames)

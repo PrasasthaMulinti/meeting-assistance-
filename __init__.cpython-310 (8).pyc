@@ -1,0 +1,60 @@
+"""
+Topic extraction using TF-IDF and LDA.
+"""
+from sklearn.feature_extraction.text import TfidfVectorizer
+from gensim import corpora
+from gensim.models import LdaModel
+from src.utils.helpers import preprocess_for_lda
+from typing import List, Tuple
+
+
+def extract_topics_tfidf(texts: List[str], top_k: int = 5) -> List[Tuple[str, float]]:
+    """
+    Extract top keywords per document using TF-IDF.
+    texts: list of document strings (e.g., meeting segments).
+    Returns list of (term, score) aggregated across documents.
+    """
+    preprocessed = [preprocess_for_lda(t) for t in texts]
+    # Handle empty docs
+    preprocessed = [t if t.strip() else "placeholder" for t in preprocessed]
+    vectorizer = TfidfVectorizer(max_features=100, ngram_range=(1, 2))
+    tfidf = vectorizer.fit_transform(preprocessed)
+    feature_names = vectorizer.get_feature_names_out()
+    scores = tfidf.toarray().sum(axis=0)
+    top_idx = scores.argsort()[-top_k:][::-1]
+    return [
+        (feature_names[i], float(scores[i]))
+        for i in top_idx
+        if feature_names[i] != "placeholder"
+    ]
+
+
+def extract_topics_lda(
+    texts: List[str], n_topics: int = 5, n_words: int = 5
+) -> List[List[Tuple[str, float]]]:
+    """
+    Extract topics using LDA.
+    Returns list of topics; each topic is list of (word, weight).
+    """
+    preprocessed = [preprocess_for_lda(t).split() for t in texts]
+    preprocessed = [[w for w in doc if len(w) > 1] for doc in preprocessed]
+    preprocessed = [doc for doc in preprocessed if doc]
+    if not preprocessed:
+        return []
+    dictionary = corpora.Dictionary(preprocessed)
+    dictionary.filter_extremes(no_below=1, no_above=0.8)
+    corpus = [dictionary.doc2bow(doc) for doc in preprocessed]
+    n_topics = min(n_topics, len(dictionary))
+    if n_topics < 1:
+        return []
+    lda = LdaModel(
+        corpus=corpus,
+        id2word=dictionary,
+        num_topics=n_topics,
+        random_state=42,
+        passes=5,
+    )
+    topics = []
+    for t in range(n_topics):
+        topics.append(lda.show_topic(t, topn=n_words))
+    return topics
